@@ -1,0 +1,354 @@
+Model Training Script 
+importnumpy as np 
+import pandas as pd 
+import cv2 
+importos 
+fromsklearn.model_selection import train_test_split 
+fromsklearn.decomposition import PCA 
+fromsklearn.svm import SVC 
+fromsklearn.ensemble import RandomForestClassifier 
+fromsklearn.linear_model import LogisticRegression 
+fromsklearn.metrics import accuracy_score, classification_report, confusion_matrix 
+importmatplotlib.pyplot as plt 
+importseaborn as sns 
+ 
+ 
+# Configuration 
+IMAGE_SIZE = 128  # Slightly smaller to help ML models process faster 
+dataset_path = '/content/Training' # REPLACE with your actual folder path 
+categories = ['glioma_tumor', 'meningioma_tumor', 'no_tumor', 'pituitary_tumor'] 
+data = [] 
+labels = [] 
+print("Loading and Preprocessing images...") 
+for category in categories: 
+path = os.path.join(dataset_path, category) 
+class_num = categories.index(category) # Label: 0, 1, 2, 3 
+ 
+forimg in os.listdir(path): 
+try: 
+            # Read image in Grayscale (0 means grayscale in cv2) 
+img_array = cv2.imread(os.path.join(path, img), 0) 
+            # Resize 
+resized_array = cv2.resize(img_array, (IMAGE_SIZE, IMAGE_SIZE)) 
+            # Flatten the image (Convert 2D matrix to 1D vector) 
+data.append(resized_array.flatten()) 
+labels.append(class_num) 
+except Exception as e: 
+pass 
+# Convert to numpy arrays 
+X = np.array(data) 
+y = np.array(labels) 
+print(f"Data Loaded. Shape: {X.shape}") # Should be (Number_of_images, 16384) 
+print("Libraries Imported Successfully!") 
+ 
+ 
+# 1. Split Data (80% Train, 20% Test) 
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y) 
+ 
+# 2. Scale the Data (Crucial for SVM) 
+# We divide by 255 to normalize pixel values between 0 and 1 
+X_train = X_train / 255.0 
+X_test = X_test / 255.0 
+ 
+# 3. Apply PCA (Principal Component Analysis) 
+# This retains 95% of the information but removes noise and reduces size 
+print("Applying PCA to reduce dimensionality...") 
+pca = PCA(n_components=0.95) # Keep 95% of variance 
+X_train_pca = pca.fit_transform(X_train) 
+X_test_pca = pca.transform(X_test) 
+ 
+print(f"Original features: {X_train.shape[1]}") 
+print(f"Reduced features after PCA: {X_train_pca.shape[1]}") 
+ 
+ 
+ 
+model_results = {} 
+# --- Model 1: Support Vector Machine (SVM) --- 
+print("Training SVM (This might take a moment)...") 
+svm_model = SVC(kernel='rbf', C=10, gamma='scale') # RBF kernel is best for complex patterns 
+svm_model.fit(X_train_pca, y_train) 
+svm_acc = accuracy_score(y_test, svm_model.predict(X_test_pca)) 
+model_results['SVM'] = svm_acc 
+print(f"SVM Accuracy: {svm_acc*100:.2f}%") 
+ 
+# --- Model 2: Random Forest --- 
+print("Training Random Forest...") 
+rf_model = RandomForestClassifier(n_estimators=100, random_state=42) 
+rf_model.fit(X_train_pca, y_train) 
+rf_acc = accuracy_score(y_test, rf_model.predict(X_test_pca)) 
+model_results['Random Forest'] = rf_acc 
+print(f"Random Forest Accuracy: {rf_acc*100:.2f}%") 
+ 
+# --- Model 3: Logistic Regression --- 
+print("Training Logistic Regression...") 
+lr_model = LogisticRegression(max_iter=1000) 
+lr_model.fit(X_train_pca, y_train) 
+lr_acc = accuracy_score(y_test, lr_model.predict(X_test_pca)) 
+model_results['Logistic Regression'] = lr_acc 
+print(f"Logistic Regression Accuracy: {lr_acc*100:.2f}%") 
+ 
+ 
+# Determine the best model 
+best_model_name = max(model_results, key=model_results.get) 
+print(f"\n🏆 The Best Model is: {best_model_name} with {model_results[best_model_name]*100:.2f}% accuracy.") 
+ 
+# Detailed Report for the Best Model 
+ifbest_model_name == 'SVM': 
+best_model = svm_model 
+elifbest_model_name == 'Random Forest': 
+best_model = rf_model 
+else: 
+best_model = lr_model 
+ 
+y_pred = best_model.predict(X_test_pca) 
+ 
+print("\nClassification Report:") 
+print(classification_report(y_test, y_pred, target_names=categories)) 
+ 
+# Plot Confusion Matrix 
+plt.figure(figsize=(8,6)) 
+sns.heatmap(confusion_matrix(y_test, y_pred), annot=True, fmt='d', cmap='Blues', 
+xticklabels=categories, yticklabels=categories) 
+plt.xlabel('Predicted') 
+plt.ylabel('Actual') 
+plt.title(f'Confusion Matrix ({best_model_name})') 
+plt.show() 
+ 
+ 
+fromsklearn.model_selection import GridSearchCV 
+# We search for the best combination of 'C' and 'gamma' parameters for SVM 
+param_grid = {'C': [1, 10, 100], 'gamma': [0.001, 0.01, 0.1, 1], 'kernel': ['rbf']} 
+grid = GridSearchCV(SVC(), param_grid, refit=True, verbose=2) 
+grid.fit(X_train_pca, y_train) 
+print(f"Best Parameters: {grid.best_params_}") 
+print(f"Best Accuracy after Tuning: {grid.best_score_ * 100:.2f}%") 
+ 
+ 
+ 
+import cv2 
+importmatplotlib.pyplot as plt 
+importnumpy as np 
+ 
+defdetect_tumor_location(image_path, model, pca): 
+    """ 
+    1. Predicts if tumor exists using ML model. 
+    2. If yes, finds location using Image Processing. 
+    """ 
+ 
+    # --- Step 1: Preprocess & Classify --- 
+img = cv2.imread(image_path, 0) # Read as grayscale 
+original_img = cv2.imread(image_path) # Read as color for drawing the box later 
+ 
+    # Resize and Flatten for the Model 
+img_resized = cv2.resize(img, (128, 128)) 
+img_flat = img_resized.flatten().reshape(1, -1) 
+ 
+    # Normalize 
+img_flat = img_flat / 255.0 
+ 
+    # PCA Transform 
+img_pca = pca.transform(img_flat) 
+ 
+    # Predict 
+prediction = model.predict(img_pca) 
+classes = ['glioma_tumor', 'meningioma_tumor', 'no_tumor', 'pituitary_tumor'] 
+result = classes[prediction[0]] 
+ 
+print(f"Model Prediction: {result}") 
+ 
+if result == 'no_tumor': 
+print("No tumor detected. Skipping localization.") 
+plt.imshow(original_img) 
+plt.show() 
+return 
+ 
+    # --- Step 2: Localization (Image Processing) --- 
+ 
+    # Blur the image slightly to remove noise 
+blurred = cv2.GaussianBlur(img_resized, (5, 5), 0) 
+ 
+    # THRESHOLDING: This is the magic step.  
+    # We look for pixels brighter than 45 (you can adjust this 45-200 range) 
+    # This creates a binary mask where the tumor is white and brain is black 
+    _, thresholded = cv2.threshold(blurred, 45, 255, cv2.THRESH_BINARY) 
+ 
+    # Find Contours (Outlines of the white blobs) 
+contours, _ = cv2.findContours(thresholded, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE) 
+ 
+    # Find the largest contour (usually the tumor is the biggest bright blob) 
+largest_contour = None 
+max_area = 0 
+forcnt in contours: 
+area = cv2.contourArea(cnt) 
+if area >max_area: 
+max_area = area 
+largest_contour = cnt 
+iflargest_contour is not None: 
+        # Get the coordinates for the box 
+x, y, w, h = cv2.boundingRect(largest_contour) 
+        # Scale coordinates back to original image size 
+scale_x = original_img.shape[1] / 128 
+scale_y = original_img.shape[0] / 128 
+        x = int(x * scale_x) 
+        y = int(y * scale_y) 
+        w = int(w * scale_x) 
+        h = int(h * scale_y) 
+ 
+        # Draw the Green Box (0, 255, 0) with thickness 2 
+cv2.rectangle(original_img, (x, y), (x + w, y + h), (0, 255, 0), 2) 
+cv2.putText(original_img, "Tumor Detected", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2) 
+ 
+    # Show Result 
+plt.figure(figsize=(6,6)) 
+plt.imshow(cv2.cvtColor(original_img, cv2.COLOR_BGR2RGB)) 
+plt.title(f"Prediction: {result}") 
+plt.axis('off') 
+plt.show() 
+ 
+# --- HOW TO RUN IT --- 
+# Pick an image from your dataset folder to test 
+test_image_path = '/content/Training/glioma_tumor/gg (1).jpg' # Replace with actual path 
+detect_tumor_location(test_image_path, best_model, pca) 
+ 
+ 
+importjoblib 
+# 1. Save the Best Model (assuming 'best_model' is your winner from previous steps) 
+joblib.dump(best_model, 'brain_tumor_model.pkl') 
+# 2. CRITICAL: Save the PCA object 
+# You need this to transform new images exactly like you did the training data 
+joblib.dump(pca, 'pca_transform.pkl') 
+print("Files saved successfully to the Colab environment!") 
+ 
+ 
+fromgoogle.colab import files 
+# Download the files to your local 'Downloads' folder 
+files.download('brain_tumor_model.pkl') 
+files.download('pca_transform.pkl') 
+ 
+ 
+ 
+ 
+importjoblib 
+import cv2 
+importnumpy as np 
+# 1. Load the files 
+print("Loading model and PCA...") 
+loaded_model = joblib.load('brain_tumor_model.pkl') 
+loaded_pca = joblib.load('pca_transform.pkl') 
+# 2. Function to predict a NEW image 
+defpredict_new_image(image_path): 
+    # Read and Preprocess 
+img = cv2.imread(image_path, 0) # Grayscale 
+img = cv2.resize(img, (128, 128)) # Must be same size as training 
+img_flat = img.flatten().reshape(1, -1) 
+    # Normalize 
+img_flat = img_flat / 255.0 
+ 
+    # Transform using the LOADED PCA (Do not fit_transform!) 
+img_pca = loaded_pca.transform(img_flat) 
+ 
+    # Predict 
+prediction = loaded_model.predict(img_pca) 
+classes = ['glioma_tumor', 'meningioma_tumor', 'no_tumor', 'pituitary_tumor'] 
+ 
+return classes[prediction[0]] 
+# Test it 
+# result = predict_new_image('path_to_some_image.jpg') 
+# print(f"Prediction: {result}") 
+ 
+ 
+ 
+# Re-initialize the SVM with probability enabled 
+print("Retraining SVM with Probability enabled...") 
+svm_model = SVC(kernel='rbf', C=10, gamma='scale', probability=True)  
+ 
+# Train again (It might take slightly longer this time) 
+svm_model.fit(X_train_pca, y_train) 
+ 
+print("Retraining Complete!") 
+ 
+# IMPORTANT: Save this new model immediately so you don't lose the probability feature 
+importjoblib 
+joblib.dump(svm_model, 'brain_tumor_model.pkl') 
+print("New probability-enabled model saved.") 
+ 
+ 
+ 
+defdetect_tumor_with_confidence(image_path, model, pca): 
+ 
+    # --- Part 1: Prediction & Confidence --- 
+img = cv2.imread(image_path, 0) 
+original_img = cv2.imread(image_path) 
+ 
+    # Resize & Preprocess 
+img_resized = cv2.resize(img, (128, 128)) 
+img_flat = img_resized.flatten().reshape(1, -1) 
+img_flat = img_flat / 255.0 
+img_pca = pca.transform(img_flat) 
+ 
+    # GET PROBABILITY (The new part) 
+    # probabilities will look like: [[0.10, 0.85, 0.02, 0.03]] 
+probs = model.predict_proba(img_pca) 
+ 
+    # Get the highest score and the matching class index 
+max_prob = np.max(probs)  
+prediction_idx = np.argmax(probs) 
+ 
+classes = ['glioma_tumor', 'meningioma_tumor', 'no_tumor', 'pituitary_tumor'] 
+result = classes[prediction_idx] 
+confidence_score = max_prob * 100  # Convert 0.85 to 85.0 
+ 
+print(f"Prediction: {result}") 
+print(f"Confidence: {confidence_score:.2f}%") 
+ 
+    # --- Part 2: Localization (Same as before) --- 
+if result == 'no_tumor': 
+        # Just show the image with text 
+plt.figure(figsize=(6,6)) 
+plt.imshow(cv2.cvtColor(original_img, cv2.COLOR_BGR2RGB)) 
+plt.title(f"Result: No Tumor ({confidence_score:.1f}%)") 
+plt.axis('off') 
+plt.show() 
+return 
+ 
+    # Localization Logic 
+blurred = cv2.GaussianBlur(img_resized, (5, 5), 0) 
+    _, thresholded = cv2.threshold(blurred, 45, 255, cv2.THRESH_BINARY) 
+contours, _ = cv2.findContours(thresholded, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE) 
+ 
+largest_contour = None 
+max_area = 0 
+forcnt in contours: 
+area = cv2.contourArea(cnt) 
+if area >max_area: 
+max_area = area 
+largest_contour = cnt 
+ 
+iflargest_contour is not None: 
+x, y, w, h = cv2.boundingRect(largest_contour) 
+ 
+        # Scale back to original size 
+scale_x = original_img.shape[1] / 128 
+scale_y = original_img.shape[0] / 128 
+x, y, w, h = int(x*scale_x), int(y*scale_y), int(w*scale_x), int(h*scale_y) 
+ 
+        # Draw Box 
+cv2.rectangle(original_img, (x, y), (x + w, y + h), (0, 255, 0), 2) 
+ 
+        # Draw Text with Confidence 
+label_text = f"{result}: {confidence_score:.1f}%" 
+ 
+        # Add a background strip for the text so it's readable 
+cv2.rectangle(original_img, (x, y-25), (x + w, y), (0, 255, 0), -1) # Filled box 
+cv2.putText(original_img, label_text, (x, y-5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 1) 
+ 
+    # Show Final Result 
+plt.figure(figsize=(6,6)) 
+plt.imshow(cv2.cvtColor(original_img, cv2.COLOR_BGR2RGB)) 
+plt.title(f"Prediction: {result} | Confidence: {confidence_score:.2f}%") 
+plt.axis('off') 
+plt.show() 
+ 
+# Run it 
+test_image = '/content/Training/pituitary_tumor/p (1).jpg' # Change to your image path 
+detect_tumor_with_confidence(test_image, svm_model, pca) 
